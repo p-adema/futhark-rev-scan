@@ -174,8 +174,7 @@ mkScanFinalMap ops w scan_lam xs ys ds = do
       dj <-
         traverse
           (\dd -> letExp (baseString dd ++ "_dj") =<< eIndex dd [eSubExp j])
-          ds
-
+          ds -- reverse ds
       fmap varsRes . letTupExp "scan_contribs"
         =<< eIf
           (toExp $ le64 i .==. 0)
@@ -265,6 +264,40 @@ identifyCase ops lam = do
   let jac = chunk d $ fmap (BasicOp . SubExp . resSubExp) $ bodyResult $ lambdaBody simp
   pure $ cases d (head t) jac
 
+mkPPADOpLifted :: VjpOps -> [VName] -> Scan SOACS -> ADM (Lambda SOACS)
+mkPPADOpLifted ops as scan = do
+  let arg_type = lambdaReturnType (scanLambda scan)
+
+  par_x1 <- zipWithM (\x -> newParam (baseString x ++ "_par_x1")) as arg_type
+  par_x2 <- zipWithM (\x -> newParam (baseString x ++ "_par_x2_unused")) as arg_type
+  par_a1 <- zipWithM (\x -> newParam (baseString x ++ "_par_a1")) as arg_type
+  par_a2 <- zipWithM (\x -> newParam (baseString x ++ "_par_a2")) as arg_type
+  par_y1_h <- zipWithM (\x -> newParam (baseString x ++ "_par_y1_h")) as arg_type
+  par_y2_h <- zipWithM (\x -> newParam (baseString x ++ "_par_y2_h")) as arg_type
+
+  mkLambda
+    (par_x1 ++ par_a1 ++ par_y1_h ++ par_x2 ++ par_a2 ++ par_y2_h)
+    ( do
+        lmb <- mkScanAdjointLam ops (scanLambda scan) WrtFirst (map (Var . paramName) par_y2_h)
+        let lmb_args = map (toExp . Var . paramName) (par_x1 ++ par_a1)
+        z_term <- map resSubExp <$> eLambda lmb lmb_args
+        z_term_types <- mapM subExpType z_term
+
+        let z_term_prim = zipWith (\zt ty -> primExpFromSubExp (elemType ty) zt) z_term z_term_types
+        let y1_h_prim = zipWith (\zt ty -> primExpFromSubExp (elemType ty) zt) (map (Var . paramName) par_y1_h) z_term_types
+        let z_prim = vectorAdd z_term_prim y1_h_prim
+        op <- renameLambda $ scanLambda scan
+
+        let z = subExpsRes <$> mapM (toSubExp "z") z_prim
+        let x1 = subExpsRes <$> mapM (toSubExp "x1" . Var . paramName) par_x1
+        let a3 = eLambda op (map (toExp . Var . paramName) (par_a1 ++ par_a2))
+
+        concat <$> sequence [x1, a3, z]
+    )
+
+eNthTmp :: (MonadBuilder m) => Integer -> VName -> m (Exp (Rep m)) -- temporary utility for nth value in array
+eNthTmp i arr = eIndex arr [eSubExp (intConst Int64 i)]
+
 diffScan :: VjpOps -> [VName] -> SubExp -> [VName] -> Scan SOACS -> ADM ()
 diffScan ops ys w as scan = do
   -- ys ~ results of scan, w ~ size of input array, as ~ (unzipped) arrays, scan ~ scan: operator with ne
@@ -275,7 +308,28 @@ diffScan ops ys w as scan = do
   as_ts <- mapM lookupType as
 
   as_contribs <- case specialCase sc of
-    GenericPPAD -> mapM (letExp "test_zero" . zeroExp) as_ts
+    GenericPPAD -> do
+      a_zeroes <- mapM (letExp "test_zero" . zeroExp) as_ts
+
+      op_lft <- mkPPADOpLifted ops as scan
+      let e = scanNeutral scan
+      let lft_scan = Scan op_lft $ e ++ e ++ map Var a_zeroes
+
+      let ex_x1 = map (eNthTmp 0) ys
+      let ex_x2 = map (eNthTmp 1) ys
+      let ex_a1 = map (eNthTmp 0) as
+      let ex_a2 = map (eNthTmp 1) as
+      let ex_y1_h = map (eNthTmp 0) ys_adj
+      let ex_y2_h = map (eNthTmp 1) ys_adj
+
+      vals_r <- eLambda op_lft (ex_x1 ++ ex_a1 ++ ex_y1_h ++ ex_x2 ++ ex_a2 ++ ex_y2_h)
+      vals <- mapM (toExp . resSubExp) (chunk 3 vals_r !! 0)
+      -- vals_3 <- replicateM 3 $ toExp $ floatConst Float32 (fromIntegral $ length vals_r)
+      -- let vals_1 = repeat $ oneExp $ rowType $ head as_ts
+
+      mapM
+        (\(src, a_t, val) -> letInPlace "test_upd" src (fullSlice a_t [DimFix (intConst Int64 0)]) val)
+        (zip3 a_zeroes as_ts vals)
     _ -> do
       map1_lam <- mkScanFusedMapLam ops w (scanLambda scan) as ys ys_adj sc d
       scans_lin_fun_o <- mkScanLinFunO (head as_ts) sc
