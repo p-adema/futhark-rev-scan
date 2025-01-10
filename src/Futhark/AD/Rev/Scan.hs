@@ -101,18 +101,18 @@ mkScanFusedMapLam ops w scn_lam xs ys ys_adj s d = do
 
             pure $ concat $ zipWith (++) yso $ fmap concat jaco
         )
-  where
-    case_jac :: Int -> SpecialCase -> [[a]] -> [[a]]
-    case_jac _ GenericIFL23 jac = jac
-    case_jac k ZeroQuadrant jac =
-      concat
-        $ zipWith
-          (\i -> map (take k . drop (i * k)))
-          [0 .. d `div` k]
-        $ chunk k jac
-    case_jac k MatrixMul jac =
-      take k <$> take k jac
-    case_jac _ GenericPPAD _ = error "Shouldn't be called in PPAD impl"
+ where
+  case_jac :: Int -> SpecialCase -> [[a]] -> [[a]]
+  case_jac _ GenericIFL23 jac = jac
+  case_jac k ZeroQuadrant jac =
+    concat
+      $ zipWith
+        (\i -> map (take k . drop (i * k)))
+        [0 .. d `div` k]
+      $ chunk k jac
+  case_jac k MatrixMul jac =
+    take k <$> take k jac
+  case_jac _ GenericPPAD _ = error "Shouldn't be called in PPAD impl"
 
 -- a1 a2 b -> a2 + b * a1
 linFunT0 :: [PrimExp VName] -> [PrimExp VName] -> [[PrimExp VName]] -> Special -> PrimType -> [PrimExp VName]
@@ -142,18 +142,18 @@ mkScanLinFunO t s = do
     traverse (letSubExp "r" <=< toExp) $ t0 ++ t1
 
   pure $ Scan lam neu_elm
-  where
-    mkNeutral (a, b) = do
-      zeros <- replicateM a $ letSubExp "zeros" $ zeroExp $ rowType t
-      idmat <- identityM b $ Prim $ elemType t
-      pure $ zeros ++ concat idmat
+ where
+  mkNeutral (a, b) = do
+    zeros <- replicateM a $ letSubExp "zeros" $ zeroExp $ rowType t
+    idmat <- identityM b $ Prim $ elemType t
+    pure $ zeros ++ concat idmat
 
-    mkParams (a, b) = do
-      a1s <- replicateM a $ newVName "a1"
-      b1s <- replicateM b $ newVName "b1"
-      a2s <- replicateM a $ newVName "a2"
-      b2s <- replicateM b $ newVName "b2"
-      pure (a1s, b1s, a2s, b2s)
+  mkParams (a, b) = do
+    a1s <- replicateM a $ newVName "a1"
+    b1s <- replicateM b $ newVName "b1"
+    a2s <- replicateM a $ newVName "a2"
+    b2s <- replicateM b $ newVName "b2"
+    pure (a1s, b1s, a2s, b2s)
 
 -- perform the final map
 -- let xs_contribs =
@@ -201,11 +201,11 @@ data SpecialCase
   deriving (Show)
 
 data Special = Special -- metadata for how to perform the scan for the reverse process
-  { specialNeutral :: (Int, Int), -- (Size of input, Size of one of the two dimensions of the Jacobian (e.g. 3 if it's 3x3, must be square because scan must be a->a->a). It's the size of the special neutral element, not the element itself
-    specialParams :: (Int, Int), -- (Size of input (nr params), Flat size of Jacobian (dim1 * dim2)). Number of params for the special lambda
-    specialScans :: Int, -- The number of scans to do, 1 in most cases, k in the ZeroQuadrant (block diagonal?) case
-    specialSubSize :: Int, -- Probably: the size of submatrices for the ZeroQuadrant (block diagonal?) case, or 1 otherwise
-    specialCase :: SpecialCase -- Which case (see above)
+  { specialNeutral :: (Int, Int) -- (Size of input, Size of one of the two dimensions of the Jacobian (e.g. 3 if it's 3x3, must be square because scan must be a->a->a). It's the size of the special neutral element, not the element itself
+  , specialParams :: (Int, Int) -- (Size of input (nr params), Flat size of Jacobian (dim1 * dim2)). Number of params for the special lambda
+  , specialScans :: Int -- The number of scans to do, 1 in most cases, k in the ZeroQuadrant (block diagonal?) case
+  , specialSubSize :: Int -- Probably: the size of submatrices for the ZeroQuadrant (block diagonal?) case, or 1 otherwise
+  , specialCase :: SpecialCase -- Which case (see above)
   }
   deriving (Show)
 
@@ -215,10 +215,10 @@ subMats d mat zero =
       poss = map (\m -> all (ok m) $ zip mat [0 .. d - 1]) sub_d
       tmp = filter fst (zip poss sub_d)
    in if null tmp then Nothing else Just $ snd $ head tmp
-  where
-    ok m (row, i) =
-      all (\(v, j) -> v == zero || i `div` m == j `div` m) $ -- so, check if compiler guaranteed zero from simplifyLambda?
-        zip row [0 .. d - 1]
+ where
+  ok m (row, i) =
+    all (\(v, j) -> v == zero || i `div` m == j `div` m) $ -- so, check if compiler guaranteed zero from simplifyLambda?
+      zip row [0 .. d - 1]
 
 data UsePPADSetting = PPADAlways | PPADReplaceGeneric | PPADNever
 
@@ -229,22 +229,22 @@ cases :: Int -> Type -> [[Exp SOACS]] -> Special
 cases d t mat = case usePPADSetting of
   PPADAlways -> Special (d, d) (d, d * d) 1 d GenericPPAD
   _ -> cases'
-  where
-    cases' :: Special
-    cases' = case subMats d mat $ zeroExp t of
-      Just k ->
-        let nonZeros = zipWith (\i -> map (take k . drop (i * k))) [0 .. d `div` k] $ chunk k mat
-         in if all (== head nonZeros) $ tail nonZeros
-              then Special (d, k) (d, k * k) 1 k MatrixMul --
-              else Special (k, k) (k, k * k) (d `div` k) k ZeroQuadrant
-      Nothing ->
-        let cs =
-              ( case usePPADSetting of
-                  PPADReplaceGeneric -> GenericPPAD
-                  PPADNever -> GenericIFL23
-                  PPADAlways -> error "unreachable"
-              )
-         in Special (d, d) (d, d * d) 1 d cs
+ where
+  cases' :: Special
+  cases' = case subMats d mat $ zeroExp t of
+    Just k ->
+      let nonZeros = zipWith (\i -> map (take k . drop (i * k))) [0 .. d `div` k] $ chunk k mat
+       in if all (== head nonZeros) $ tail nonZeros
+            then Special (d, k) (d, k * k) 1 k MatrixMul --
+            else Special (k, k) (k, k * k) (d `div` k) k ZeroQuadrant
+    Nothing ->
+      let cs =
+            ( case usePPADSetting of
+                PPADReplaceGeneric -> GenericPPAD
+                PPADNever -> GenericIFL23
+                PPADAlways -> error "unreachable"
+            )
+       in Special (d, d) (d, d * d) 1 d cs
 
 identifyCase :: VjpOps -> Lambda SOACS -> ADM Special -- construct and optimise a temporary lambda, that calculates the Jacobian of the scan op. Figure out if the Jacobian has some special shape, discarding the temporary lambda
 identifyCase ops lam = do
@@ -264,6 +264,46 @@ identifyCase ops lam = do
   let jac = chunk d $ fmap (BasicOp . SubExp . resSubExp) $ bodyResult $ lambdaBody simp
   pure $ cases d (head t) jac
 
+scanRight :: [VName] -> SubExp -> Scan SOACS -> ADM [VName]
+scanRight as w scan = do
+  -- Took inspiration from Peter's code to define the reverse operator
+  let arg_type = lambdaReturnType (scanLambda scan)
+
+  par_a1 <- zipWithM (\x -> newParam (baseString x ++ "_par_a1")) as arg_type
+  par_a2 <- zipWithM (\x -> newParam (baseString x ++ "_par_a2")) as arg_type
+  -- Just the original operator but with par_a1 and par_a2 swapped.
+  rev_op <-
+    mkLambda
+      (par_a1 ++ par_a2)
+      ( do
+          op <- renameLambda $ scanLambda scan
+          let a3 = eLambda op (map (toExp . Var . paramName) (par_a2 ++ par_a1))
+
+          concat <$> sequence [a3]
+      )
+  -- same neutral element
+  let e = scanNeutral scan
+  let rev_scan = Scan rev_op e
+
+  iota <-
+    letExp "iota" $ BasicOp $ Iota w (intConst Int64 0) (intConst Int64 1) Int64
+  -- flip the input array (this code is inspired from the code in diffScanAdd, but made to work with [VName] instead VName)
+  map_scan <- rev_arr_lam as
+  -- perform the scan
+  scan_res <- letTupExp "adj_ctrb_scan" . Op . Screma w [iota] $ scanomapSOAC [rev_scan] map_scan
+  -- flip the output array again
+  rev_lam <- rev_arr_lam scan_res
+  letTupExp "contrb" $ Op $ Screma w [iota] $ mapSOAC rev_lam
+ where
+  rev_arr_lam :: [VName] -> ADM (Lambda SOACS)
+  rev_arr_lam arrs = do
+    par_i <- newParam "i" $ Prim int64
+    mkLambda [par_i] $ do
+      forM arrs $ \arr -> do
+        a <-
+          letExp "ys_bar_rev"
+            =<< eIndex arr [toExp (pe64 w - le64 (paramName par_i) - 1)]
+        pure $ varRes a
 mkPPADOpLifted :: VjpOps -> [VName] -> Scan SOACS -> ADM (Lambda SOACS)
 mkPPADOpLifted ops as scan = do
   let arg_type = lambdaReturnType (scanLambda scan)
@@ -343,14 +383,14 @@ diffScan ops ys w as scan = do
   -- Goal: calculate as_contribs in new way
   -- zipWithM_ updateAdj as as_contribs -- as_bar += new adjoint
   zipWithM_ updateAdj as as_contribs
-  where
-    mkScans :: Int -> Scan SOACS -> ADM [Scan SOACS]
-    mkScans d s =
-      replicateM d $ do
-        lam' <- renameLambda $ scanLambda s
-        pure $ Scan lam' $ scanNeutral s -- repeatedly rename the variables in the lambda, adding d scans (copies of 's') in total
-    splitScanRes sc res d =
-      concatMap (take (div d $ specialScans sc)) (orderArgs sc res)
+ where
+  mkScans :: Int -> Scan SOACS -> ADM [Scan SOACS]
+  mkScans d s =
+    replicateM d $ do
+      lam' <- renameLambda $ scanLambda s
+      pure $ Scan lam' $ scanNeutral s -- repeatedly rename the variables in the lambda, adding d scans (copies of 's') in total
+  splitScanRes sc res d =
+    concatMap (take (div d $ specialScans sc)) (orderArgs sc res)
 
 diffScanVec ::
   VjpOps ->
@@ -412,12 +452,12 @@ diffScanAdd _ops ys n lam' ne as = do
   contrb <- letExp "contrb" $ Op $ Screma n [iota] $ mapSOAC rev_lam
 
   updateAdj as contrb
-  where
-    rev_arr_lam :: VName -> ADM (Lambda SOACS)
-    rev_arr_lam arr = do
-      par_i <- newParam "i" $ Prim int64
-      mkLambda [par_i] $ do
-        a <-
-          letExp "ys_bar_rev"
-            =<< eIndex arr [toExp (pe64 n - le64 (paramName par_i) - 1)]
-        pure [varRes a]
+ where
+  rev_arr_lam :: VName -> ADM (Lambda SOACS)
+  rev_arr_lam arr = do
+    par_i <- newParam "i" $ Prim int64
+    mkLambda [par_i] $ do
+      a <-
+        letExp "ys_bar_rev"
+          =<< eIndex arr [toExp (pe64 n - le64 (paramName par_i) - 1)]
+      pure [varRes a]
