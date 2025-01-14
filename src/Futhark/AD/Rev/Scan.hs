@@ -347,8 +347,6 @@ mkPPADOpLifted ops as scan w = do
     )
   where
     op_lift px1 pa1 py1 pa2 py2 adds = do
-      let x1 = subExpsRes <$> mapM (toSubExp "x1" . Var . paramName) px1
-
       op_bar_1 <- mkScanAdjointLam ops (scanLambda scan) WrtFirst (Var . paramName <$> py2)
       let op_bar_args = toExp . Var . paramName <$> px1 ++ pa1
       z_term <- map resSubExp <$> eLambda op_bar_1 op_bar_args
@@ -357,6 +355,7 @@ mkPPADOpLifted ops as scan w = do
               (\(z_t, y_1, add) -> head <$> eLambda add [toExp z_t, toExp y_1])
               (zip3 z_term (Var . paramName <$> py1) adds)
 
+      let x1 = subExpsRes <$> mapM (toSubExp "x1" . Var . paramName) px1
       op <- renameLambda $ scanLambda scan
       let a3 = eLambda op (toExp . paramName <$> pa1 ++ pa2)
       let is_e = pure [subExpRes $ Constant $ BoolValue False]
@@ -427,19 +426,17 @@ diffScan ops ys w as scan = do
 
   as_contribs <- case specialCase sc of
     GenericPPAD -> do
-      op_lft <- mkPPADOpLifted ops as scan w
       let e = scanNeutral scan
-      a_zero <- mapM (letExp "rscan_zero" . zeroExp . rowType) as_ts
-      let lft_scan = Scan op_lft $ e ++ e ++ map Var a_zero ++ [Constant $ BoolValue True]
-
       as_lift <- asLiftPPAD as w e
-      -- Original PPAD doesn't need a marker for identity (as it's a right identity, and
-      -- can just be passed to the reverse scan), but the Futhark compiler does some
-      -- strange constant folding that leads to an incorrect result if the identities aren't
-      -- explicitly filtered out.
+
       is_e <- letExp "is_e" $ BasicOp $ Replicate (Shape [w]) $ Constant $ BoolValue False
       let m = ys ++ as_lift ++ ys_adj ++ [is_e]
+
+      op_lft <- mkPPADOpLifted ops as scan w
+      a_zero <- mapM (fmap Var . letExp "rscan_zero" . zeroExp . rowType) as_ts
+      let lft_scan = Scan op_lft $ e ++ e ++ a_zero ++ [Constant $ BoolValue True]
       rs_adj <- (!! 2) . chunk d <$> scanRight m w lft_scan
+
       ys_right <- ysRightPPAD ys w e
 
       final_lmb <- finalMapPPAD ops as scan
